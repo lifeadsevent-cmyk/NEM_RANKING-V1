@@ -120,7 +120,7 @@ const PLAYER_DATABASE: Record<string, { force: number; vs: number; donations: nu
   "fabio1996": { force: 12632414, vs: 6118053, donations: 23400 }
 };
 
-// --- LOGIQUE DE CALCUL DES MOYENNES ET NOTES ---
+// --- CALCULS DES MOYENNES ---
 const DB_VALUES = Object.values(PLAYER_DATABASE);
 const AVG_FORCE = DB_VALUES.reduce((a, b) => a + b.force, 0) / DB_VALUES.length;
 const AVG_VS = DB_VALUES.reduce((a, b) => a + b.vs, 0) / DB_VALUES.length;
@@ -147,7 +147,7 @@ const RAW_DATA: PlayerData[] = Object.entries(PLAYER_DATABASE)
   .sort((a, b) => b.scoreFinal - a.scoreFinal)
   .map((p, index) => ({ ...p, rank: index + 1 }));
 
-// --- LOGIQUE TEAM BUILDER OPTIMISÉE (MÉLANGE 60/40 DYNAMIQUE) ---
+// --- LOGIQUE TEAM BUILDER 60/40 ---
 const buildTeams = (players: PlayerData[]) => {
   const excluded = ["PredatorRage", "livioff"];
   const filtered = players.filter(p => !excluded.includes(p.name));
@@ -161,9 +161,10 @@ const buildTeams = (players: PlayerData[]) => {
   let subsA: PlayerData[] = [];
   let subsB: PlayerData[] = [];
 
-  // 1. Placements forcés en ALPHA
-  const forcedNames = ["Naana2B", "LiThys"];
-  forcedNames.forEach(name => {
+  const forcedA = ["Naana2B", "LiThys", "NYMOUS"];
+  const forcedB = ["LouisAuguste Blanqui"];
+
+  forcedA.forEach(name => {
     const p = pool.find(player => player.name === name);
     if (p) {
       if (startersPool.some(s => s.name === name)) startersA.push(p);
@@ -171,21 +172,24 @@ const buildTeams = (players: PlayerData[]) => {
     }
   });
 
-  // 2. Balancement Dynamique des Titulaires pour Mélanger les Forces
-  // On trie par force décroissante pour assurer un mélange équitable des "gros" joueurs
-  const remainingStarters = startersPool
-    .filter(p => !forcedNames.includes(p.name))
-    .sort((a, b) => b.force - a.force);
+  forcedB.forEach(name => {
+    const p = pool.find(player => player.name === name);
+    if (p) {
+      if (startersPool.some(s => s.name === name)) startersB.push(p);
+      else subsB.push(p);
+    }
+  });
+
+  const allForced = [...forcedA, ...forcedB];
+  const remainingStarters = startersPool.filter(p => !allForced.includes(p.name)).sort((a, b) => b.force - a.force);
 
   let currentForceA = startersA.reduce((acc, p) => acc + p.force, 0);
-  let currentForceB = 0;
+  let currentForceB = startersB.reduce((acc, p) => acc + p.force, 0);
   
   remainingStarters.forEach(p => {
-    const totalProcessedForce = currentForceA + currentForceB + p.force;
-    const targetA = totalProcessedForce * 0.6;
-
-    // Si ajouter p à A maintient le ratio vers 60% OU si B est plein
-    if ((currentForceA < targetA && startersA.length < 20) || startersB.length >= 20) {
+    const totalCurrentForce = currentForceA + currentForceB + p.force;
+    const targetRatioA = 0.6;
+    if ((currentForceA < totalCurrentForce * targetRatioA && startersA.length < 20) || startersB.length >= 20) {
       startersA.push(p);
       currentForceA += p.force;
     } else {
@@ -194,16 +198,11 @@ const buildTeams = (players: PlayerData[]) => {
     }
   });
 
-  // 3. Balancement Dynamique des Remplaçants
-  const remainingSubs = subsPool
-    .filter(p => !forcedNames.includes(p.name))
-    .sort((a, b) => b.force - a.force);
-
+  const remainingSubs = subsPool.filter(p => !allForced.includes(p.name)).sort((a, b) => b.force - a.force);
   remainingSubs.forEach(p => {
-    const totalProcessedForce = currentForceA + currentForceB + p.force;
-    const targetA = totalProcessedForce * 0.6;
-
-    if ((currentForceA < targetA && subsA.length < 10) || subsB.length >= 10) {
+    const totalCurrentForce = currentForceA + currentForceB + p.force;
+    const targetRatioA = 0.6;
+    if ((currentForceA < totalCurrentForce * targetRatioA && subsA.length < 10) || subsB.length >= 10) {
       subsA.push(p);
       currentForceA += p.force;
     } else {
@@ -212,17 +211,16 @@ const buildTeams = (players: PlayerData[]) => {
     }
   });
 
+  const nameToTeam: Record<string, string> = {};
+  startersA.forEach(p => nameToTeam[p.name] = 'ALPHA');
+  subsA.forEach(p => nameToTeam[p.name] = 'ALPHA');
+  startersB.forEach(p => nameToTeam[p.name] = 'BRAVO');
+  subsB.forEach(p => nameToTeam[p.name] = 'BRAVO');
+
   return {
-    teamA: {
-      starters: startersA.sort((a, b) => b.scoreFinal - a.scoreFinal),
-      subs: subsA.sort((a, b) => b.scoreFinal - a.scoreFinal),
-      totalForce: currentForceA
-    },
-    teamB: {
-      starters: startersB.sort((a, b) => b.scoreFinal - a.scoreFinal),
-      subs: subsB.sort((a, b) => b.scoreFinal - a.scoreFinal),
-      totalForce: currentForceB
-    }
+    teamA: { starters: startersA.sort((a, b) => b.scoreFinal - a.scoreFinal), subs: subsA.sort((a, b) => b.scoreFinal - a.scoreFinal), totalForce: currentForceA },
+    teamB: { starters: startersB.sort((a, b) => b.scoreFinal - a.scoreFinal), subs: subsB.sort((a, b) => b.scoreFinal - a.scoreFinal), totalForce: currentForceB },
+    nameToTeam
   };
 };
 
@@ -245,7 +243,6 @@ const TeamCard = ({ title, players, force, color, totalForceGlobal }: any) => {
           <div className={`h-full transition-all duration-1000 ease-out rounded-full ${color === 'indigo' ? 'bg-gradient-to-r from-indigo-600 to-indigo-400' : 'bg-gradient-to-r from-emerald-600 to-emerald-400'}`} style={{ width: `${percentage}%` }} />
         </div>
       </div>
-
       <div className="p-6 space-y-8">
         <div>
           <h4 className="text-[11px] font-black uppercase tracking-[0.3em] text-slate-400 mb-5 flex items-center gap-3">
@@ -288,6 +285,8 @@ export default function App() {
   const [page, setPage] = useState(1);
   const itemsPerPage = 30;
 
+  const teams = useMemo(() => buildTeams(RAW_DATA), []);
+
   const processed = useMemo(() => {
     let list = RAW_DATA.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
     list.sort((a, b) => {
@@ -298,9 +297,7 @@ export default function App() {
     return list;
   }, [search, sort]);
 
-  const teams = useMemo(() => buildTeams(RAW_DATA), []);
   const totalForceGlobalTeams = teams.teamA.totalForce + teams.teamB.totalForce;
-
   const totalPages = Math.ceil(processed.length / itemsPerPage);
   const currentItems = processed.slice((page - 1) * itemsPerPage, page * itemsPerPage);
 
@@ -312,11 +309,17 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#020617] text-slate-100 p-4 md:p-10 font-['Inter'] selection:bg-indigo-500/30">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
         <header className="flex flex-col lg:flex-row justify-between items-center gap-10 mb-16 relative">
-          <div className="text-center lg:text-left">
-            <h1 className="text-7xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-br from-white via-indigo-300 to-emerald-400 drop-shadow-2xl">NEM RANKING</h1>
-            <p className="text-slate-500 text-[11px] font-black uppercase tracking-[0.6em] mt-3 opacity-60">High-Fidelity Guild Intelligence Hub</p>
+          <div className="text-center lg:text-left space-y-2">
+            <h1 className="text-7xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-br from-white via-indigo-300 to-emerald-400 drop-shadow-2xl uppercase">
+              NEM RANKING
+            </h1>
+            <h2 className="text-7xl font-black tracking-tighter text-amber-500 drop-shadow-2xl uppercase italic">
+              Tempête du désert
+            </h2>
+            <p className="text-slate-500 text-[11px] font-black uppercase tracking-[0.6em] opacity-40 mt-4">
+              High-Fidelity Guild Intelligence Hub
+            </p>
           </div>
           
           <div className="flex flex-col sm:flex-row items-center gap-6 w-full lg:w-auto">
@@ -367,64 +370,72 @@ export default function App() {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-slate-800/30 text-[11px] uppercase tracking-[0.4em] font-black text-slate-500 border-b border-white/5">
-                      <th className="px-10 py-8 cursor-pointer" onClick={() => handleSort('rank')}>RANG</th>
-                      <th className="px-10 py-8 cursor-pointer" onClick={() => handleSort('name')}>AGENT</th>
-                      <th className="px-10 py-8 cursor-pointer text-center" onClick={() => handleSort('donations')}>
-                        DONATIONS <br/><span className="text-[8px] opacity-60">AVG: {Math.floor(AVG_DONATIONS)}</span>
-                      </th>
-                      <th className="px-10 py-8 cursor-pointer text-center" onClick={() => handleSort('vs')}>
-                        VS <br/><span className="text-[8px] opacity-60">AVG: {(AVG_VS/1000000).toFixed(1)}M</span>
-                      </th>
-                      <th className="px-10 py-8 cursor-pointer text-center" onClick={() => handleSort('force')}>
-                        FORCE <br/><span className="text-[8px] opacity-60">AVG: {(AVG_FORCE/1000000).toFixed(1)}M</span>
-                      </th>
-                      <th className="px-10 py-8 cursor-pointer text-center" onClick={() => handleSort('scoreFinal')}>POWER SCORE</th>
+                      <th className="px-6 py-8 cursor-pointer" onClick={() => handleSort('rank')}>RANG</th>
+                      <th className="px-6 py-8 cursor-pointer" onClick={() => handleSort('name')}>AGENT</th>
+                      <th className="px-6 py-8 text-center">UNITÉ</th>
+                      <th className="px-6 py-8 cursor-pointer text-center" onClick={() => handleSort('donations')}>DONATIONS</th>
+                      <th className="px-6 py-8 cursor-pointer text-center" onClick={() => handleSort('vs')}>VS</th>
+                      <th className="px-6 py-8 cursor-pointer text-center" onClick={() => handleSort('force')}>FORCE</th>
+                      <th className="px-6 py-8 cursor-pointer text-center" onClick={() => handleSort('scoreFinal')}>POWER SCORE</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {currentItems.map(p => (
-                      <tr key={p.name} className="hover:bg-indigo-500/5 transition-all duration-200 group">
-                        <td className="px-10 py-7">
-                          <span className={`inline-block w-10 h-10 text-center leading-10 rounded-2xl font-black text-xs ${
-                            p.rank === 1 ? 'bg-amber-500 text-black shadow-xl' : 
-                            p.rank === 2 ? 'bg-slate-400 text-black' : 
-                            p.rank === 3 ? 'bg-orange-600 text-white' : 'text-slate-500 bg-slate-900/50'
-                          }`}>{p.rank}</span>
-                        </td>
-                        <td className="px-10 py-7 font-black text-base text-white group-hover:text-indigo-400 transition-colors">
-                          {p.name}
-                        </td>
-                        <td className="px-10 py-7 text-center">
-                          <div className="flex flex-col items-center">
-                            <span className="font-mono text-xs text-slate-300">{p.donations.toLocaleString()}</span>
-                            <span className="mt-1 bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full text-[9px] font-black border border-emerald-500/20">
-                              {p.noteDonations}%
+                    {currentItems.map(p => {
+                      const unit = teams.nameToTeam[p.name] || 'N/A';
+                      return (
+                        <tr key={p.name} className="hover:bg-indigo-500/5 transition-all duration-200 group">
+                          <td className="px-6 py-7">
+                            <span className={`inline-block w-10 h-10 text-center leading-10 rounded-2xl font-black text-xs ${
+                              p.rank === 1 ? 'bg-amber-500 text-black shadow-xl' : 
+                              p.rank === 2 ? 'bg-slate-400 text-black' : 
+                              p.rank === 3 ? 'bg-orange-600 text-white' : 'text-slate-500 bg-slate-900/50'
+                            }`}>{p.rank}</span>
+                          </td>
+                          <td className="px-6 py-7 font-black text-base text-white group-hover:text-indigo-400 transition-colors">
+                            {p.name}
+                          </td>
+                          <td className="px-6 py-7 text-center">
+                            <span className={`text-[10px] font-black tracking-widest px-3 py-1.5 rounded-lg border flex items-center justify-center gap-2 mx-auto max-w-[100px] ${
+                              unit === 'ALPHA' ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' : 
+                              unit === 'BRAVO' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 
+                              'bg-slate-800/50 text-slate-500 border-slate-700/30'
+                            }`}>
+                              <span className={`w-1 h-1 rounded-full ${unit === 'ALPHA' ? 'bg-indigo-400' : 'bg-emerald-400'}`}></span>
+                              {unit}
                             </span>
-                          </div>
-                        </td>
-                        <td className="px-10 py-7 text-center">
-                          <div className="flex flex-col items-center">
-                            <span className="font-mono text-xs text-slate-300">{(p.vs/1000000).toFixed(2)}M</span>
-                            <span className="mt-1 bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded-full text-[9px] font-black border border-indigo-500/20">
-                              {p.noteVS}%
+                          </td>
+                          <td className="px-6 py-7 text-center">
+                            <div className="flex flex-col items-center">
+                              <span className="font-mono text-xs text-slate-300">{p.donations.toLocaleString()}</span>
+                              <span className="mt-1 bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full text-[9px] font-black border border-emerald-500/20">
+                                {p.noteDonations}%
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-7 text-center">
+                            <div className="flex flex-col items-center">
+                              <span className="font-mono text-xs text-slate-300">{(p.vs/1000000).toFixed(2)}M</span>
+                              <span className="mt-1 bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded-full text-[9px] font-black border border-indigo-500/20">
+                                {p.noteVS}%
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-7 text-center">
+                            <div className="flex flex-col items-center">
+                              <span className="font-mono text-xs text-slate-100 font-bold">{(p.force/1000000).toFixed(3)}M</span>
+                              <span className="mt-1 bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded-full text-[9px] font-black border border-blue-500/20">
+                                {p.noteForce}%
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-7 text-center">
+                            <span className="bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 px-5 py-2.5 rounded-xl text-[12px] font-black shadow-inner">
+                              {p.scoreFinal.toFixed(2)}
                             </span>
-                          </div>
-                        </td>
-                        <td className="px-10 py-7 text-center">
-                          <div className="flex flex-col items-center">
-                            <span className="font-mono text-xs text-slate-100 font-bold">{(p.force/1000000).toFixed(3)}M</span>
-                            <span className="mt-1 bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded-full text-[9px] font-black border border-blue-500/20">
-                              {p.noteForce}%
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-10 py-7 text-center">
-                          <span className="bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 px-5 py-2.5 rounded-xl text-[12px] font-black shadow-inner">
-                            {p.scoreFinal.toFixed(2)}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -443,7 +454,6 @@ export default function App() {
           </div>
         ) : (
           <div className="animate-in fade-in slide-in-from-bottom-8 duration-1000 ease-out">
-            {/* Squad Dispatch Header */}
             <div className="glass-panel p-12 rounded-[4rem] mb-12 border-l-[15px] border-indigo-600 shadow-2xl overflow-hidden relative">
               <h2 className="text-6xl font-black tracking-tighter text-white italic mb-2 uppercase relative z-10">Squad Dispatch Protocol</h2>
               <div className="absolute right-0 top-0 text-[180px] font-black text-white/5 select-none pointer-events-none transform translate-x-1/4 -translate-y-1/4 italic">60/40</div>
@@ -469,12 +479,12 @@ export default function App() {
         )}
       </div>
 
-      <footer className="max-w-7xl mx-auto border-t border-white/5 pt-16 pb-24 flex flex-col md:flex-row justify-between items-center opacity-60">
+      <footer className="max-w-7xl mx-auto border-t border-white/5 pt-16 pb-24 flex flex-col md:flex-row justify-between items-center opacity-40">
         <div className="flex items-center gap-8">
             <div className="w-14 h-14 rounded-3xl bg-slate-900 border border-white/10 flex items-center justify-center font-black text-2xl text-slate-400">N</div>
             <div>
-              <p className="text-[12px] font-black uppercase tracking-[0.7em] text-slate-500">NEM RANKING • V5.3</p>
-              <p className="text-[9px] font-bold uppercase tracking-widest text-slate-700 mt-1">Relative Average Scoring Matrix Active • 60/40 Balanced Mix</p>
+              <p className="text-[12px] font-black uppercase tracking-[0.7em] text-slate-500">NEM RANKING • DESERT STORM</p>
+              <p className="text-[9px] font-bold uppercase tracking-widest text-slate-700 mt-1">Relative Average Scoring Matrix Active • 60/40 Optimized Split</p>
             </div>
         </div>
         <div className="flex items-center gap-12">
