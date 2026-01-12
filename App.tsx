@@ -1,26 +1,11 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 
-// --- TYPES ---
-export interface PlayerData {
-  rank: number;
-  name: string;
-  donations: number;
-  vs: number;
-  force: number;
-  noteDonations: number;
-  noteVS: number;
-  noteForce: number;
-  scoreFinal: number;
-}
-
-export type SortKey = keyof PlayerData;
-export type SortOrder = 'asc' | 'desc';
-export type ViewMode = 'leaderboard' | 'teams' | 'train';
-export type TrainHistory = Record<string, string>;
-
-// --- BASE DE DONNÉES ---
-const PLAYER_DATABASE: Record<string, { force: number; vs: number; donations: number }> = {
+// ========================================================
+// 🛡️ CLOUD DATABASE (PERSISTANCE GITHUB / VERCEL)
+// ========================================================
+// NOTE POUR LE LEAD : Remplacez ce bloc par le code généré dans l'onglet "EFFECTIF".
+const INITIAL_DATABASE: Record<string, { force: number; vs: number; donations: number }> = {
   "Erekosee": { force: 71909193, vs: 99337884, donations: 38050 },
   "indiajam": { force: 65158143, vs: 74436415, donations: 41000 },
   "livioff": { force: 59021119, vs: 49419013, donations: 46700 },
@@ -121,424 +106,251 @@ const PLAYER_DATABASE: Record<string, { force: number; vs: number; donations: nu
   "fabio1996": { force: 12632414, vs: 6118053, donations: 23400 }
 };
 
-// --- CALCULS DES MOYENNES ---
-const DB_VALUES = Object.values(PLAYER_DATABASE);
-const AVG_FORCE = DB_VALUES.reduce((a, b) => a + b.force, 0) / DB_VALUES.length;
-const AVG_VS = DB_VALUES.reduce((a, b) => a + b.vs, 0) / DB_VALUES.length;
-const AVG_DONATIONS = DB_VALUES.reduce((a, b) => a + b.donations, 0) / DB_VALUES.length;
+const INITIAL_TRAIN: Record<string, string> = {};
+const INITIAL_WEEK = { start: '05/01/26', end: '10/01/26' };
 
-const RAW_DATA: PlayerData[] = Object.entries(PLAYER_DATABASE)
-  .map(([name, stats]) => {
-    const noteForce = (stats.force / AVG_FORCE) * 100;
-    const noteVS = (stats.vs / AVG_VS) * 100;
-    const noteDonations = (stats.donations / AVG_DONATIONS) * 100;
-    const scoreFinal = (noteDonations * 0.35 + noteVS * 0.35 + noteForce * 0.3);
+// ========================================================
 
-    return {
-      name,
-      force: stats.force,
-      vs: stats.vs,
-      donations: stats.donations,
-      noteForce: parseFloat(noteForce.toFixed(2)),
-      noteVS: parseFloat(noteVS.toFixed(2)),
-      noteDonations: parseFloat(noteDonations.toFixed(2)),
-      scoreFinal: parseFloat(scoreFinal.toFixed(2))
-    };
-  })
-  .sort((a, b) => b.scoreFinal - a.scoreFinal)
-  .map((p, index) => ({ ...p, rank: index + 1 }));
+// --- TYPES ---
+export interface PlayerData {
+  rank: number;
+  name: string;
+  donations: number;
+  vs: number;
+  force: number;
+  noteDonations: number;
+  noteVS: number;
+  noteForce: number;
+  scoreFinal: number;
+  squad?: string;
+}
+
+export type ViewMode = 'leaderboard' | 'teams' | 'train' | 'add-player';
 
 // --- LOGIQUE TEAM BUILDER 60/40 ---
 const buildTeams = (players: PlayerData[]) => {
-  const excluded = ["PredatorRage", "livioff"];
-  const filtered = players.filter(p => !excluded.includes(p.name));
-  const pool = [...filtered].sort((a, b) => b.scoreFinal - a.scoreFinal).slice(0, 60);
-  
+  const pool = [...players].sort((a, b) => b.scoreFinal - a.scoreFinal).slice(0, 60);
   const startersPool = pool.slice(0, 40);
   const subsPool = pool.slice(40, 60);
-
-  let startersA: PlayerData[] = [];
-  let startersB: PlayerData[] = [];
-  let subsA: PlayerData[] = [];
-  let subsB: PlayerData[] = [];
-
-  const forcedA = ["Naana2B", "LiThys", "NYMOUS"];
-  const forcedB = ["LouisAuguste Blanqui"];
-
+  
+  let startersA: PlayerData[] = [], startersB: PlayerData[] = [], subsA: PlayerData[] = [], subsB: PlayerData[] = [];
+  const forcedA = ["Naana2B", "LiThys", "NYMOUS"], forcedB = ["LouisAuguste Blanqui"];
+  
   forcedA.forEach(name => {
     const p = pool.find(player => player.name === name);
-    if (p) {
-      if (startersPool.some(s => s.name === name)) startersA.push(p);
-      else subsA.push(p);
-    }
+    if (p) { if (startersPool.some(s => s.name === name)) startersA.push(p); else subsA.push(p); }
   });
-
   forcedB.forEach(name => {
     const p = pool.find(player => player.name === name);
-    if (p) {
-      if (startersPool.some(s => s.name === name)) startersB.push(p);
-      else subsB.push(p);
-    }
+    if (p) { if (startersPool.some(s => s.name === name)) startersB.push(p); else subsB.push(p); }
   });
 
   const allForced = [...forcedA, ...forcedB];
   const remainingStarters = startersPool.filter(p => !allForced.includes(p.name)).sort((a, b) => b.force - a.force);
+  let currentForceA = startersA.reduce((acc, p) => acc + p.force, 0), currentForceB = startersB.reduce((acc, p) => acc + p.force, 0);
 
-  let currentForceA = startersA.reduce((acc, p) => acc + p.force, 0);
-  let currentForceB = startersB.reduce((acc, p) => acc + p.force, 0);
-  
   remainingStarters.forEach(p => {
-    const totalCurrentForce = currentForceA + currentForceB + p.force;
-    const targetRatioA = 0.6;
-    if ((currentForceA < totalCurrentForce * targetRatioA && startersA.length < 20) || startersB.length >= 20) {
-      startersA.push(p);
-      currentForceA += p.force;
-    } else {
-      startersB.push(p);
-      currentForceB += p.force;
-    }
+    const totalForce = currentForceA + currentForceB + p.force;
+    if ((currentForceA < totalForce * 0.6 && startersA.length < 20) || startersB.length >= 20) { startersA.push(p); currentForceA += p.force; }
+    else { startersB.push(p); currentForceB += p.force; }
   });
 
   const remainingSubs = subsPool.filter(p => !allForced.includes(p.name)).sort((a, b) => b.force - a.force);
   remainingSubs.forEach(p => {
-    const totalCurrentForce = currentForceA + currentForceB + p.force;
-    const targetRatioA = 0.6;
-    if ((currentForceA < totalCurrentForce * targetRatioA && subsA.length < 10) || subsB.length >= 10) {
-      subsA.push(p);
-      currentForceA += p.force;
-    } else {
-      subsB.push(p);
-      currentForceB += p.force;
-    }
+    const totalForce = currentForceA + currentForceB + p.force;
+    if ((currentForceA < totalForce * 0.6 && subsA.length < 10) || subsB.length >= 10) { subsA.push(p); currentForceA += p.force; }
+    else { subsB.push(p); currentForceB += p.force; }
   });
 
-  const nameToTeam: Record<string, string> = {};
-  startersA.forEach(p => nameToTeam[p.name] = 'ALPHA');
-  subsA.forEach(p => nameToTeam[p.name] = 'ALPHA');
-  startersB.forEach(p => nameToTeam[p.name] = 'BRAVO');
-  subsB.forEach(p => nameToTeam[p.name] = 'BRAVO');
-
-  return {
-    teamA: { starters: startersA.sort((a, b) => b.scoreFinal - a.scoreFinal), subs: subsA.sort((a, b) => b.scoreFinal - a.scoreFinal), totalForce: currentForceA },
-    teamB: { starters: startersB.sort((a, b) => b.scoreFinal - a.scoreFinal), subs: subsB.sort((a, b) => b.scoreFinal - a.scoreFinal), totalForce: currentForceB },
-    nameToTeam
-  };
-};
-
-const TeamCard = ({ title, players, force, color, totalForceGlobal }: any) => {
-  const percentage = totalForceGlobal > 0 ? ((force / totalForceGlobal) * 100).toFixed(1) : "0";
-  return (
-    <div className={`glass-panel rounded-[2.5rem] overflow-hidden border-t-4 transition-all duration-500 hover:shadow-2xl ${color === 'indigo' ? 'border-indigo-500 shadow-indigo-500/10' : 'border-emerald-500 shadow-emerald-500/10'}`}>
-      <div className="p-8 bg-slate-800/20 backdrop-blur-md">
-        <div className="flex justify-between items-end mb-6">
-          <div>
-            <h3 className="text-3xl font-black italic tracking-tighter text-white uppercase">{title}</h3>
-            <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.3em] mt-1">FORCE DE FRAPPE: {(force / 1000000).toFixed(1)}M</p>
-          </div>
-          <div className="text-right">
-            <span className={`text-4xl font-black ${color === 'indigo' ? 'text-indigo-400' : 'text-emerald-400'}`}>{percentage}%</span>
-            <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">IMPACT RATIO</p>
-          </div>
-        </div>
-        <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden shadow-inner">
-          <div className={`h-full transition-all duration-1000 ease-out rounded-full ${color === 'indigo' ? 'bg-gradient-to-r from-indigo-600 to-indigo-400' : 'bg-gradient-to-r from-emerald-600 to-emerald-400'}`} style={{ width: `${percentage}%` }} />
-        </div>
-      </div>
-      <div className="p-6 space-y-8">
-        <div>
-          <h4 className="text-[11px] font-black uppercase tracking-[0.3em] text-slate-400 mb-5 flex items-center gap-3">
-            <span className={`w-2 h-2 rounded-full ${color === 'indigo' ? 'bg-indigo-500 animate-pulse' : 'bg-emerald-500 animate-pulse'}`}></span>
-            TITULAIRES (20)
-          </h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {players.starters.map((p: PlayerData) => (
-              <div key={p.name} className="bg-slate-900/40 p-3.5 rounded-2xl border border-slate-800/50 flex items-center gap-3 hover:border-slate-700 transition-colors group">
-                <span className="text-[10px] font-black text-slate-600 w-5">#{p.rank}</span>
-                <span className="text-xs font-bold truncate flex-1 text-slate-200 group-hover:text-white">{p.name}</span>
-                <span className="text-[10px] font-mono text-slate-500 font-bold">{(p.force / 1000000).toFixed(1)}M</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div>
-          <h4 className="text-[11px] font-black uppercase tracking-[0.3em] text-slate-600 mb-5 flex items-center gap-3">
-            <span className="w-2 h-2 rounded-full bg-slate-800"></span>
-            REMPLAÇANTS (10)
-          </h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 opacity-60 hover:opacity-100 transition-opacity duration-500">
-            {players.subs.map((p: PlayerData) => (
-              <div key={p.name} className="bg-slate-900/20 p-2.5 rounded-xl border border-dashed border-slate-800 flex items-center gap-3">
-                <span className="text-[10px] font-bold text-slate-700 w-5">#{p.rank}</span>
-                <span className="text-xs font-medium truncate flex-1 text-slate-500">{p.name}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  const nameToSquad: Record<string, string> = {};
+  startersA.forEach(p => nameToSquad[p.name] = 'ALPHA'); subsA.forEach(p => nameToSquad[p.name] = 'ALPHA');
+  startersB.forEach(p => nameToSquad[p.name] = 'BRAVO'); subsB.forEach(p => nameToSquad[p.name] = 'BRAVO');
+  
+  return { startersA, startersB, subsA, subsB, currentForceA, currentForceB, nameToSquad };
 };
 
 export default function App() {
   const [view, setView] = useState<ViewMode>('leaderboard');
   const [search, setSearch] = useState('');
-  const [sort, setSort] = useState<{ key: SortKey, order: SortOrder }>({ key: 'rank', order: 'asc' });
-  const [page, setPage] = useState(1);
-  const itemsPerPage = 30;
-
-  // Lead State
   const [isLead, setIsLead] = useState(false);
-  const [passInput, setPassInput] = useState('');
   const [showLogin, setShowLogin] = useState(false);
+  const [passInput, setPassInput] = useState('');
   
-  // Train State
-  const [train, setTrain] = useState<TrainHistory>({});
+  const [customPlayers, setCustomPlayers] = useState<Record<string, { force: number; vs: number; donations: number }>>({});
+  const [train, setTrain] = useState<Record<string, string>>(INITIAL_TRAIN);
+  const [weekRange, setWeekRange] = useState(INITIAL_WEEK);
+  const [exportSource, setExportSource] = useState('');
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
-  // Calcul des statistiques de train pour les conducteurs
-  const trainStats = useMemo(() => {
-    const stats: Record<string, number> = {};
-    Object.values(train).forEach(name => {
-      stats[name] = (stats[name] || 0) + 1;
-    });
-    return stats;
-  }, [train]);
-
-  const trainRanking = useMemo(() => {
-    return Object.entries(trainStats)
-      .sort(([, a], [, b]) => b - a)
-      .map(([name, count]) => ({ name, count }));
-  }, [trainStats]);
-
-  // Génération des jours du mois en cours
-  const calendarDays = useMemo(() => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const firstDay = new Date(year, month, 1).getDay(); // 0 (Sun) to 6 (Sat)
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    
-    // Normaliser pour que la semaine commence Lundi (1)
-    const startOffset = firstDay === 0 ? 6 : firstDay - 1;
-    
-    const days = [];
-    // Remplissage des jours du mois précédent pour aligner la grille
-    for (let i = 0; i < startOffset; i++) {
-        days.push(null);
-    }
-    // Jours du mois
-    for (let i = 1; i <= daysInMonth; i++) {
-        days.push(`${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`);
-    }
-    return days;
-  }, []);
-
   useEffect(() => {
-    const saved = localStorage.getItem('nem_calendar_v2');
-    if (saved) try { setTrain(JSON.parse(saved)); } catch (e) {}
+    const saved = localStorage.getItem('nem_custom_v4');
+    if (saved) setCustomPlayers(JSON.parse(saved));
+    const savedTrain = localStorage.getItem('nem_train_v4');
+    if (savedTrain) setTrain(JSON.parse(savedTrain));
+    const savedWeek = localStorage.getItem('nem_week_v4');
+    if (savedWeek) setWeekRange(JSON.parse(savedWeek));
   }, []);
 
-  const handleAssign = (playerName: string) => {
-    if (!isLead || !selectedDate) return;
-    setTrain(prev => {
-      const next = { ...prev };
-      next[selectedDate] = playerName;
-      localStorage.setItem('nem_calendar_v2', JSON.stringify(next));
-      return next;
-    });
-    setSelectedDate(null);
-  };
+  const fullDataset = useMemo(() => {
+    const all = { ...INITIAL_DATABASE, ...customPlayers };
+    const values = Object.values(all);
+    const avgF = values.reduce((acc, b) => acc + b.force, 0) / (values.length || 1);
+    const avgV = values.reduce((acc, b) => acc + b.vs, 0) / (values.length || 1);
+    const avgD = values.reduce((acc, b) => acc + b.donations, 0) / (values.length || 1);
 
-  const handleClear = (date: string) => {
-    if (!isLead) return;
-    setTrain(prev => {
-      const next = { ...prev };
-      delete next[date];
-      localStorage.setItem('nem_calendar_v2', JSON.stringify(next));
-      return next;
-    });
-  };
+    const players = Object.entries(all)
+      .map(([name, stats]) => {
+        const nf = (stats.force / avgF) * 100, nv = (stats.vs / avgV) * 100, nd = (stats.donations / avgD) * 100;
+        return {
+          name, force: stats.force, vs: stats.vs, donations: stats.donations,
+          noteForce: parseFloat(nf.toFixed(1)), noteVS: parseFloat(nv.toFixed(1)), noteDonations: parseFloat(nd.toFixed(1)),
+          scoreFinal: parseFloat((nd * 0.35 + nv * 0.35 + nf * 0.3).toFixed(2))
+        };
+      })
+      .sort((a, b) => b.scoreFinal - a.scoreFinal)
+      .map((p, i) => ({ ...p, rank: i + 1 }));
+
+    const { nameToSquad } = buildTeams(players);
+    return players.map(p => ({ ...p, squad: nameToSquad[p.name] || 'RESERVE' }));
+  }, [customPlayers]);
+
+  const teams = useMemo(() => buildTeams(fullDataset), [fullDataset]);
+  const filteredData = useMemo(() => fullDataset.filter(p => p.name.toLowerCase().includes(search.toLowerCase())), [fullDataset, search]);
 
   const checkLead = () => {
     if (passInput === 'NEMLEAD') { setIsLead(true); setShowLogin(false); setPassInput(''); }
-    else { alert("ACCÈS REFUSÉ"); setPassInput(''); }
+    else alert("ACCÈS REFUSÉ");
   };
 
-  const teams = useMemo(() => buildTeams(RAW_DATA), []);
-
-  const processed = useMemo(() => {
-    let list = RAW_DATA.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
-    list.sort((a, b) => {
-      const av = a[sort.key], bv = b[sort.key];
-      const res = typeof av === 'string' ? (av as string).localeCompare(bv as string) : (av as number) - (bv as number);
-      return sort.order === 'asc' ? res : -res;
-    });
-    return list;
-  }, [search, sort]);
-
-  const totalForceGlobalTeams = teams.teamA.totalForce + teams.teamB.totalForce;
-  const totalPages = Math.ceil(processed.length / itemsPerPage);
-  const currentItems = processed.slice((page - 1) * itemsPerPage, page * itemsPerPage);
-
-  const handleSort = (key: SortKey) => {
-    setSort(prev => ({ key, order: prev.key === key && prev.order === 'desc' ? 'asc' : 'desc' }));
-    setPage(1);
+  const handleAssign = (playerName: string) => {
+    if (!isLead || !selectedDate) return;
+    const next = { ...train, [selectedDate]: playerName };
+    setTrain(next);
+    localStorage.setItem('nem_train_v4', JSON.stringify(next));
+    setSelectedDate(null);
   };
 
-  const monthName = new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(new Date());
+  const handleClearTrain = (date: string) => {
+    if (!isLead) return;
+    const next = { ...train };
+    delete next[date];
+    setTrain(next);
+    localStorage.setItem('nem_train_v4', JSON.stringify(next));
+  };
+
+  const handleGenerateSource = () => {
+    const mergedDB = { ...INITIAL_DATABASE, ...customPlayers };
+    const dbCode = `const INITIAL_DATABASE: Record<string, { force: number; vs: number; donations: number }> = ${JSON.stringify(mergedDB, null, 2)};`;
+    const trainCode = `const INITIAL_TRAIN: Record<string, string> = ${JSON.stringify(train, null, 2)};`;
+    const weekCode = `const INITIAL_WEEK = ${JSON.stringify(weekRange, null, 2)};`;
+    setExportSource(`${dbCode}\n\n${trainCode}\n\n${weekCode}`);
+  };
+
+  const calendarDays = useMemo(() => {
+    const now = new Date(), year = now.getFullYear(), month = now.getMonth();
+    const firstDay = new Date(year, month, 1).getDay(), daysInMonth = new Date(year, month + 1, 0).getDate();
+    const offset = firstDay === 0 ? 6 : firstDay - 1, days = [];
+    for (let i = 0; i < offset; i++) days.push(null);
+    for (let i = 1; i <= daysInMonth; i++) days.push(`${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`);
+    return days;
+  }, []);
 
   return (
-    <div className="min-h-screen bg-[#020617] text-slate-100 p-4 md:p-10 font-['Inter'] selection:bg-indigo-500/30">
+    <div className="min-h-screen bg-[#020617] text-slate-100 font-['Inter'] selection:bg-indigo-500/30 p-4 md:p-10 overflow-x-hidden">
       <div className="max-w-7xl mx-auto">
-        <header className="flex flex-col lg:flex-row justify-between items-center gap-10 mb-16 relative">
+        
+        {/* HEADER */}
+        <header className="flex flex-col lg:flex-row justify-between items-center gap-10 mb-16">
           <div className="text-center lg:text-left space-y-2">
-            <h1 className="text-7xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-br from-white via-indigo-300 to-emerald-400 drop-shadow-2xl uppercase">
+            <h1 className="text-7xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-br from-white via-indigo-300 to-emerald-400 uppercase drop-shadow-2xl">
               NEM RANKING
             </h1>
-            <h2 className="text-7xl font-black tracking-tighter text-amber-500 drop-shadow-2xl uppercase italic">
-              Tempête du désert
-            </h2>
-            <p className="text-slate-500 text-[11px] font-black uppercase tracking-[0.6em] opacity-40 mt-4">
-              High-Fidelity Guild Intelligence Hub
-            </p>
-          </div>
-          
-          <div className="flex flex-col sm:flex-row items-center gap-6 w-full lg:w-auto">
-            <nav className="flex bg-slate-900/60 p-1.5 rounded-3xl border border-white/5 backdrop-blur-2xl shadow-3xl">
-              <button 
-                onClick={() => setView('leaderboard')}
-                className={`px-6 py-4 rounded-2xl text-[10px] font-black tracking-widest transition-all duration-300 ${view === 'leaderboard' ? 'bg-indigo-600 text-white shadow-2xl shadow-indigo-600/40' : 'text-slate-500 hover:text-white'}`}
-              >
-                CLASSEMENT
-              </button>
-              <button 
-                onClick={() => setView('teams')}
-                className={`px-6 py-4 rounded-2xl text-[10px] font-black tracking-widest transition-all duration-300 ${view === 'teams' ? 'bg-indigo-600 text-white shadow-2xl shadow-indigo-600/40' : 'text-slate-500 hover:text-white'}`}
-              >
-                SQUAD DISPATCH
-              </button>
-              <button 
-                onClick={() => setView('train')}
-                className={`px-6 py-4 rounded-2xl text-[10px] font-black tracking-widest transition-all duration-300 ${view === 'train' ? 'bg-amber-600 text-white shadow-2xl shadow-amber-600/40' : 'text-slate-500 hover:text-white'}`}
-              >
-                CALENDRIER TRAIN
-              </button>
-            </nav>
-
-            <div className="flex items-center gap-4">
-              {showLogin ? (
-                <div className="bg-slate-900 border border-amber-500 p-1.5 rounded-2xl flex gap-2 animate-in fade-in slide-in-from-right-2">
-                  <input type="password" placeholder="CODE..." className="bg-transparent outline-none px-3 text-amber-500 font-bold w-20 text-[10px] uppercase" 
-                    value={passInput} onChange={e => setPassInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && checkLead()} autoFocus />
-                  <button onClick={checkLead} className="bg-amber-500 text-black px-4 py-2 rounded-xl font-black text-[9px] uppercase">OK</button>
-                </div>
-              ) : (
-                <button onClick={() => isLead ? setIsLead(false) : setShowLogin(true)} 
-                  className={`px-6 py-4 rounded-2xl border transition-all text-[9px] font-black tracking-widest uppercase ${isLead ? 'bg-amber-500 text-black border-amber-400' : 'bg-slate-950 text-slate-500 border-white/10 hover:text-white'}`}>
-                  {isLead ? 'LEAD ACCÈS' : 'VERROUILLÉ'}
-                </button>
-              )}
+            <div className="flex flex-wrap items-center gap-3 justify-center lg:justify-start">
+               <span className="bg-amber-500 text-black px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest italic">OP : TEMPETE DU DESERT</span>
+               <span className="border border-white/10 px-4 py-1 rounded-full text-[10px] font-black uppercase text-slate-500 tracking-widest">
+                 DATES : {weekRange.start} → {weekRange.end}
+               </span>
+               <span className="bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 px-4 py-1 rounded-full text-[9px] font-black uppercase">FULL CLOUD SYNC ACTIVE</span>
             </div>
+          </div>
 
-            {(view === 'leaderboard') && (
-              <div className="relative w-full sm:w-60 group">
-                <input 
-                  type="text" placeholder="LOCATE AGENT..." 
-                  className="bg-slate-900/80 border border-slate-800/50 rounded-2xl px-6 py-4 w-full focus:ring-2 ring-indigo-500/50 outline-none transition-all text-xs font-black tracking-widest placeholder:text-slate-700 uppercase"
-                  onChange={e => { setSearch(e.target.value); setPage(1); }}
-                />
-              </div>
-            )}
+          <div className="flex flex-col sm:flex-row items-center gap-4">
+            <nav className="flex bg-slate-900/60 p-1.5 rounded-3xl border border-white/5 backdrop-blur-xl">
+               {['leaderboard', 'teams', 'train', 'add-player'].map(m => (
+                 <button key={m} onClick={() => setView(m as ViewMode)} className={`px-6 py-4 rounded-2xl text-[9px] font-black tracking-widest transition-all ${view === m ? 'bg-indigo-600 shadow-xl' : 'text-slate-500 hover:text-white uppercase'}`}>
+                   {m === 'leaderboard' ? 'CLASSEMENT' : m === 'teams' ? 'SQUAD' : m === 'train' ? 'TRAIN' : 'EFFECTIF'}
+                 </button>
+               ))}
+            </nav>
+            <button onClick={() => isLead ? setIsLead(false) : setShowLogin(true)} className={`px-6 py-4 rounded-2xl border text-[9px] font-black tracking-widest uppercase transition-all ${isLead ? 'bg-amber-500 text-black border-amber-400' : 'bg-slate-950 text-slate-500 border-white/10'}`}>
+              {isLead ? 'MODE LEAD' : 'LOGIN'}
+            </button>
           </div>
         </header>
 
+        {/* MAIN VIEW */}
         {view === 'leaderboard' && (
-          <div className="space-y-10 animate-in fade-in slide-in-from-top-6 duration-1000 ease-out">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              {[
-                { label: 'Force Cumulative', val: (processed.reduce((a,b)=>a+b.force,0)/1000000).toFixed(1) + 'M', color: 'border-indigo-500' },
-                { label: 'Donations Hebdo', val: (processed.reduce((a,b)=>a+b.donations,0)/1000).toFixed(1) + 'K', color: 'border-emerald-500' },
-                { label: 'Moyenne Force', val: (AVG_FORCE/1000000).toFixed(1) + 'M', color: 'border-slate-800' },
-                { label: 'Moyenne VS', val: (AVG_VS/1000000).toFixed(1) + 'M', color: 'border-amber-500' }
-              ].map((s, i) => (
-                <div key={i} className={`glass-panel p-8 rounded-[2.5rem] border-t-2 ${s.color} hover:bg-slate-800/40 transition-all duration-300 group shadow-lg`}>
-                  <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em] mb-3 group-hover:text-slate-300 transition-colors">{s.label}</p>
-                  <p className="text-4xl font-black text-white tracking-tighter">{s.val}</p>
-                </div>
-              ))}
-            </div>
-
-            <div className="glass-panel rounded-[3rem] overflow-hidden border-slate-800/50 shadow-2xl">
+          <div className="space-y-10 animate-in fade-in slide-in-from-top-4 duration-700">
+            <div className="glass-panel rounded-[2.5rem] overflow-hidden border-slate-800/50 shadow-2xl">
+              <div className="p-8 border-b border-white/5 flex flex-col md:flex-row gap-6 items-center justify-between">
+                 <input type="text" placeholder="RECHERCHER UN AGENT..." value={search} onChange={e => setSearch(e.target.value)} className="bg-slate-950 border border-white/5 rounded-2xl px-8 py-5 w-full md:w-96 text-xs font-bold uppercase focus:border-indigo-500 outline-none transition-all shadow-inner" />
+                 <div className="flex items-center gap-6">
+                    <div className="text-right">
+                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">FORCE ALLIANCE</p>
+                       <p className="text-2xl font-black text-white italic">{(fullDataset.reduce((a,b)=>a+b.force,0)/1000000).toFixed(1)}M</p>
+                    </div>
+                 </div>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left">
-                  <thead>
-                    <tr className="bg-slate-800/30 text-[11px] uppercase tracking-[0.4em] font-black text-slate-500 border-b border-white/5">
-                      <th className="px-6 py-8 cursor-pointer" onClick={() => handleSort('rank')}>RANG</th>
-                      <th className="px-6 py-8 cursor-pointer" onClick={() => handleSort('name')}>AGENT</th>
-                      <th className="px-6 py-8 text-center">UNITÉ</th>
-                      <th className="px-6 py-8 cursor-pointer text-center" onClick={() => handleSort('donations')}>DONATIONS</th>
-                      <th className="px-6 py-8 cursor-pointer text-center" onClick={() => handleSort('vs')}>VS</th>
-                      <th className="px-6 py-8 cursor-pointer text-center" onClick={() => handleSort('force')}>FORCE</th>
-                      <th className="px-6 py-8 cursor-pointer text-center" onClick={() => handleSort('scoreFinal')}>POWER SCORE</th>
+                  <thead className="bg-slate-800/30 text-[10px] uppercase tracking-[0.4em] font-black text-slate-500 border-b border-white/5">
+                    <tr>
+                      <th className="px-8 py-8">RANG</th>
+                      <th className="px-8 py-8">AGENT</th>
+                      <th className="px-8 py-8 text-center">SQUAD</th>
+                      <th className="px-8 py-8 text-center">FORCE</th>
+                      <th className="px-8 py-8 text-center">VS</th>
+                      <th className="px-8 py-8 text-center">DONATIONS</th>
+                      <th className="px-8 py-8 text-right">SCORE</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {currentItems.map(p => {
-                      const unit = teams.nameToTeam[p.name] || 'N/A';
-                      return (
-                        <tr key={p.name} className="hover:bg-indigo-500/5 transition-all duration-200 group">
-                          <td className="px-6 py-7">
-                            <span className={`inline-block w-10 h-10 text-center leading-10 rounded-2xl font-black text-xs ${
-                              p.rank === 1 ? 'bg-amber-500 text-black shadow-xl' : 
-                              p.rank === 2 ? 'bg-slate-400 text-black' : 
-                              p.rank === 3 ? 'bg-orange-600 text-white' : 'text-slate-500 bg-slate-900/50'
-                            }`}>{p.rank}</span>
-                          </td>
-                          <td className="px-6 py-7 font-black text-base text-white group-hover:text-indigo-400 transition-colors">
-                            {p.name}
-                          </td>
-                          <td className="px-6 py-7 text-center">
-                            <span className={`text-[10px] font-black tracking-widest px-3 py-1.5 rounded-lg border flex items-center justify-center gap-2 mx-auto max-w-[100px] ${
-                              unit === 'ALPHA' ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' : 
-                              unit === 'BRAVO' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 
-                              'bg-slate-800/50 text-slate-500 border-slate-700/30'
-                            }`}>
-                              <span className={`w-1 h-1 rounded-full ${unit === 'ALPHA' ? 'bg-indigo-400' : 'bg-emerald-400'}`}></span>
-                              {unit}
-                            </span>
-                          </td>
-                          <td className="px-6 py-7 text-center">
-                            <div className="flex flex-col items-center">
-                              <span className="font-mono text-xs text-slate-300">{p.donations.toLocaleString()}</span>
-                              <span className="mt-1 bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full text-[9px] font-black border border-emerald-500/20">
-                                {p.noteDonations}%
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-7 text-center">
-                            <div className="flex flex-col items-center">
-                              <span className="font-mono text-xs text-slate-300">{(p.vs/1000000).toFixed(2)}M</span>
-                              <span className="mt-1 bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded-full text-[9px] font-black border border-indigo-500/20">
-                                {p.noteVS}%
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-7 text-center">
-                            <div className="flex flex-col items-center">
-                              <span className="font-mono text-xs text-slate-100 font-bold">{(p.force/1000000).toFixed(3)}M</span>
-                              <span className="mt-1 bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded-full text-[9px] font-black border border-blue-500/20">
-                                {p.noteForce}%
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-7 text-center">
-                            <span className="bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 px-5 py-2.5 rounded-xl text-[12px] font-black shadow-inner">
-                              {p.scoreFinal.toFixed(2)}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {filteredData.map(p => (
+                      <tr key={p.name} className="hover:bg-indigo-500/5 group transition-all duration-300">
+                        <td className="px-8 py-7">
+                          <span className={`inline-block w-10 h-10 text-center leading-10 rounded-xl font-black text-[11px] ${p.rank <= 3 ? 'bg-amber-500 text-black shadow-xl shadow-amber-500/20' : 'bg-slate-900 text-slate-500'}`}>{p.rank}</span>
+                        </td>
+                        <td className="px-8 py-7">
+                          <p className="font-black text-base uppercase group-hover:text-indigo-400 transition-colors">{p.name}</p>
+                        </td>
+                        <td className="px-8 py-7 text-center">
+                          <span className={`px-4 py-1.5 rounded-lg text-[9px] font-black tracking-widest border ${p.squad === 'ALPHA' ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : p.squad === 'BRAVO' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-slate-800 text-slate-500 border-slate-700'}`}>
+                            {p.squad}
+                          </span>
+                        </td>
+                        <td className="px-8 py-7 text-center">
+                          <div className="flex flex-col items-center">
+                            <span className="text-xs font-mono text-slate-300">{(p.force/1000000).toFixed(2)}M</span>
+                            <span className="mt-2 px-3 py-1 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-lg text-[9px] font-black tracking-widest">{p.noteForce}%</span>
+                          </div>
+                        </td>
+                        <td className="px-8 py-7 text-center">
+                          <div className="flex flex-col items-center">
+                            <span className="text-xs font-mono text-slate-300">{(p.vs/1000000).toFixed(2)}M</span>
+                            <span className="mt-2 px-3 py-1 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-lg text-[9px] font-black tracking-widest">{p.noteVS}%</span>
+                          </div>
+                        </td>
+                        <td className="px-8 py-7 text-center">
+                          <div className="flex flex-col items-center">
+                            <span className="text-xs font-mono text-slate-300">{p.donations.toLocaleString()}</span>
+                            <span className="mt-2 px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-[9px] font-black tracking-widest">{p.noteDonations}%</span>
+                          </div>
+                        </td>
+                        <td className="px-8 py-7 text-right">
+                          <span className="bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 px-5 py-2.5 rounded-xl font-black text-xs shadow-lg">{p.scoreFinal.toFixed(2)}</span>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -546,203 +358,146 @@ export default function App() {
           </div>
         )}
 
+        {/* SQUAD VIEW */}
         {view === 'teams' && (
-          <div className="animate-in fade-in slide-in-from-bottom-8 duration-1000 ease-out">
-            <div className="glass-panel p-12 rounded-[4rem] mb-12 border-l-[15px] border-indigo-600 shadow-2xl overflow-hidden relative">
-              <h2 className="text-6xl font-black tracking-tighter text-white italic mb-2 uppercase relative z-10">Squad Dispatch Protocol</h2>
-              <div className="absolute right-0 top-0 text-[180px] font-black text-white/5 select-none pointer-events-none transform translate-x-1/4 -translate-y-1/4 italic">60/40</div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 mb-32">
-              <TeamCard 
-                title="UNITE ALPHA" 
-                players={teams.teamA} 
-                force={teams.teamA.totalForce} 
-                color="indigo"
-                totalForceGlobal={totalForceGlobalTeams}
-              />
-              <TeamCard 
-                title="UNITE BRAVO" 
-                players={teams.teamB} 
-                force={teams.teamB.totalForce} 
-                color="emerald"
-                totalForceGlobal={totalForceGlobalTeams}
-              />
-            </div>
-          </div>
-        )}
-
-        {view === 'train' && (
-          <div className="animate-in slide-in-from-bottom-12 duration-1000 ease-out space-y-12 pb-20">
-            <div className="glass-panel p-16 rounded-[5rem] border-l-[25px] border-amber-600 shadow-2xl overflow-hidden relative">
-              <div className="relative z-10">
-                <h3 className="text-7xl font-black italic uppercase tracking-tighter leading-none mb-4 text-white">Log de Commandement</h3>
-                <p className="text-amber-500 font-black uppercase tracking-[0.8em] text-[10px] ml-2 opacity-80">Planning Stratégique Mensuel</p>
-              </div>
-              <div className="absolute right-[-40px] top-[-40px] text-[300px] font-black text-white/5 select-none pointer-events-none italic uppercase">CAL</div>
-            </div>
-
-            {/* Classement Conducteurs - Visible par le Lead */}
-            {isLead && (
-                <div className="glass-panel rounded-[4rem] p-12 border-t-4 border-amber-500 animate-in slide-in-from-top-4">
-                    <div className="flex items-center gap-6 mb-10">
-                        <div className="w-16 h-16 bg-amber-500 rounded-3xl flex items-center justify-center shadow-2xl shadow-amber-500/20">
-                            <svg className="w-8 h-8 text-black" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
-                        </div>
-                        <div>
-                            <h4 className="text-4xl font-black italic uppercase tracking-tighter text-white">Classement Conducteurs</h4>
-                            <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em] mt-1">HALL OF FAME TRAIN (LEAD VIEW)</p>
-                        </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                        {trainRanking.slice(0, 8).map((conducteur, i) => (
-                            <div key={conducteur.name} className="bg-slate-900/40 p-6 rounded-3xl border border-white/5 flex items-center justify-between group hover:border-amber-500/50 transition-all">
-                                <div className="flex items-center gap-4">
-                                    <span className={`text-xl font-black ${i === 0 ? 'text-amber-500' : 'text-slate-600'}`}>#{i + 1}</span>
-                                    <span className="font-bold text-slate-200 group-hover:text-white truncate max-w-[120px]">{conducteur.name}</span>
-                                </div>
-                                <div className="text-right">
-                                    <span className="text-2xl font-black text-amber-500">{conducteur.count}</span>
-                                    <p className="text-[8px] font-black text-slate-600 uppercase tracking-widest">OPS</p>
-                                </div>
-                            </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 animate-in slide-in-from-bottom-8 duration-700">
+             {[
+               { name: 'UNIT ALPHA (A)', data: teams.startersA, subs: teams.subsA, force: teams.currentForceA, color: 'indigo' },
+               { name: 'UNIT BRAVO (B)', data: teams.startersB, subs: teams.subsB, force: teams.currentForceB, color: 'emerald' }
+             ].map(t => (
+               <div key={t.name} className={`glass-panel p-10 rounded-[3rem] border-t-8 ${t.color === 'indigo' ? 'border-indigo-600' : 'border-emerald-600'}`}>
+                  <div className="flex justify-between items-end mb-8">
+                     <h3 className="text-4xl font-black italic uppercase tracking-tighter text-white">{t.name}</h3>
+                     <p className="text-xl font-black text-slate-400 italic">{(t.force/1000000).toFixed(1)}M PWR</p>
+                  </div>
+                  <div className="space-y-3">
+                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-4">TITULAIRES (TOP 20)</p>
+                     <div className="grid grid-cols-2 gap-3">
+                        {t.data.map(p => (
+                          <div key={p.name} className="bg-slate-900/40 p-3 rounded-xl border border-white/5 flex items-center justify-between">
+                             <span className="text-[10px] font-bold truncate text-slate-300">{p.name}</span>
+                             <span className="text-[9px] font-mono text-slate-500">{(p.force/1000000).toFixed(1)}M</span>
+                          </div>
                         ))}
-                        {trainRanking.length === 0 && <p className="col-span-full text-slate-600 italic uppercase text-[10px] font-black tracking-widest text-center py-10">Aucun déploiement enregistré</p>}
-                    </div>
+                     </div>
+                  </div>
+               </div>
+             ))}
+          </div>
+        )}
+
+        {/* TRAIN VIEW */}
+        {view === 'train' && (
+          <div className="animate-in slide-in-from-right-4 duration-700">
+             <div className="glass-panel p-10 rounded-[4rem] border-white/5 shadow-2xl">
+                <h3 className="text-5xl font-black italic uppercase text-white mb-10 tracking-tighter">Logistique du Train</h3>
+                <div className="grid grid-cols-7 gap-4">
+                   {['LUN', 'MAR', 'MER', 'JEU', 'VEN', 'SAM', 'DIM'].map(d => <div key={d} className="text-center text-[11px] font-black text-slate-600 tracking-widest py-4">{d}</div>)}
+                   {calendarDays.map((date, idx) => {
+                     if (!date) return <div key={`empty-${idx}`} className="aspect-square bg-slate-900/10 rounded-3xl border border-dashed border-slate-800 opacity-20"></div>;
+                     const driver = train[date];
+                     return (
+                       <div key={date} onClick={() => isLead && setSelectedDate(date)} className={`aspect-square relative rounded-[2.5rem] border flex flex-col items-center justify-center p-6 cursor-pointer transition-all ${driver ? 'bg-amber-500/10 border-amber-500/50 shadow-lg' : 'bg-slate-950 border-white/5 hover:border-slate-500'}`}>
+                          <span className="absolute top-4 left-6 text-[10px] font-black text-slate-700">{date.split('-')[2]}</span>
+                          <span className="text-xs font-black text-white uppercase text-center">{driver || (isLead ? 'CHOISIR' : 'LIBRE')}</span>
+                          {driver && isLead && <button onClick={e => { e.stopPropagation(); handleClearTrain(date); }} className="absolute top-2 right-2 text-red-500 font-bold p-1">×</button>}
+                       </div>
+                     );
+                   })}
                 </div>
-            )}
+             </div>
+          </div>
+        )}
 
-            {/* Calendrier Grid */}
-            <div className="glass-panel rounded-[4rem] p-10 shadow-2xl">
-              <div className="flex justify-between items-center mb-10 px-6">
-                <h4 className="text-4xl font-black uppercase italic tracking-tighter text-white">{monthName}</h4>
-                <div className="flex gap-2">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 bg-slate-900 px-4 py-2 rounded-full border border-white/5">Un Seul Agent par Jour autorisé</span>
+        {/* EFFECTIF / ADMIN VIEW */}
+        {view === 'add-player' && (
+          <div className="animate-in slide-in-from-right-12 duration-700 space-y-12">
+            <div className="glass-panel p-16 rounded-[5rem] border-l-[25px] border-emerald-600 shadow-2xl relative overflow-hidden">
+               <h3 className="text-7xl font-black italic uppercase leading-none text-white">Archives & Sync</h3>
+               <div className="absolute right-0 top-0 text-[180px] font-black text-white/5 select-none pointer-events-none transform translate-x-1/4 -translate-y-1/4 italic">DATA</div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                <div className="glass-panel p-10 rounded-[3rem] border-white/5 space-y-10">
+                   <h4 className="text-3xl font-black uppercase italic text-white">Persistance Cloud</h4>
+                   <p className="text-slate-500 text-xs font-bold uppercase tracking-widest leading-relaxed">
+                     Ce bouton génère le code incluant **toutes** les données actuelles (nouveaux joueurs, calendrier du train, semaine).
+                     Remplacez le bloc INITIAL_DATABASE et INITIAL_TRAIN au début de App.tsx sur GitHub pour sauvegarder en ligne.
+                   </p>
+                   <button onClick={handleGenerateSource} className="w-full py-8 bg-indigo-600 text-white rounded-[2rem] font-black text-xs uppercase tracking-[0.4em] shadow-3xl hover:bg-indigo-500 transition-all">GÉNÉRER CODE SOURCE GLOBAL</button>
+                   {exportSource && (
+                     <div className="space-y-4 animate-in fade-in">
+                        <textarea readOnly value={exportSource} className="w-full bg-slate-950 border border-indigo-500/30 rounded-3xl p-6 font-mono text-[9px] text-indigo-400 h-48 no-scrollbar shadow-inner" />
+                        <button onClick={() => { navigator.clipboard.writeText(exportSource); alert("CODE COPIÉ !"); }} className="w-full py-4 bg-slate-800 text-white rounded-2xl font-black text-[9px] uppercase tracking-widest">COPIER DANS LE PRESSE-PAPIER</button>
+                     </div>
+                   )}
                 </div>
-              </div>
 
-              <div className="grid grid-cols-7 gap-4">
-                {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(d => (
-                  <div key={d} className="text-center text-[11px] font-black uppercase tracking-widest text-slate-600 py-4">{d}</div>
-                ))}
-                {calendarDays.map((date, idx) => {
-                  if (!date) return <div key={`empty-${idx}`} className="bg-slate-900/10 rounded-3xl aspect-square opacity-20 border border-dashed border-slate-800"></div>;
-                  
-                  const dayNum = date.split('-')[2];
-                  const assigned = train[date];
-                  const isToday = new Date().toISOString().split('T')[0] === date;
-
-                  return (
-                    <div 
-                      key={date} 
-                      onClick={() => isLead && setSelectedDate(date)}
-                      className={`relative aspect-square rounded-[2rem] border transition-all duration-300 flex flex-col items-center justify-center p-4 cursor-pointer group ${
-                        assigned 
-                        ? 'bg-amber-500/10 border-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.1)]' 
-                        : 'bg-slate-900/40 border-white/5 hover:border-slate-500'
-                      } ${isToday ? 'ring-4 ring-indigo-500/30' : ''}`}
-                    >
-                      <span className={`absolute top-4 left-6 text-[10px] font-black ${assigned ? 'text-amber-500' : 'text-slate-700'}`}>{dayNum}</span>
-                      {assigned ? (
-                        <>
-                          <span className="text-sm font-black text-white text-center uppercase leading-tight tracking-tighter mb-1">{assigned}</span>
-                          <span className="text-[8px] font-black text-amber-500 uppercase tracking-widest">ASSIGNÉ</span>
-                          {isLead && (
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); handleClear(date); }}
-                                className="absolute top-2 right-2 w-6 h-6 rounded-full bg-slate-950 text-slate-500 hover:text-red-400 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                            >
-                                ×
-                            </button>
-                          )}
-                        </>
-                      ) : (
-                        <span className="text-[9px] font-black text-slate-800 group-hover:text-slate-500 uppercase tracking-widest">{isLead ? 'CHOISIR' : 'LIBRE'}</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                <div className="glass-panel p-10 rounded-[3rem] border-white/5 space-y-10">
+                   <h4 className="text-3xl font-black uppercase italic text-white">Ajouter Agent</h4>
+                   <form onSubmit={e => {
+                     e.preventDefault();
+                     if (!isLead) return;
+                     const fd = new FormData(e.currentTarget);
+                     const next = { ...customPlayers, [fd.get('name') as string]: { force: parseInt(fd.get('force') as string), vs: parseInt(fd.get('vs') as string), donations: parseInt(fd.get('donations') as string) } };
+                     setCustomPlayers(next);
+                     localStorage.setItem('nem_custom_v4', JSON.stringify(next));
+                     (e.currentTarget as HTMLFormElement).reset();
+                     alert("AGENT AJOUTÉ LOCALEMENT.");
+                   }} className="grid grid-cols-1 gap-6">
+                      <input name="name" placeholder="NOM AGENT" required className="bg-slate-950 border border-white/10 rounded-2xl px-6 py-4 text-xs font-bold uppercase focus:border-emerald-500 outline-none" />
+                      <div className="grid grid-cols-3 gap-4">
+                        <input name="force" type="number" placeholder="FORCE" required className="bg-slate-950 border border-white/10 rounded-2xl px-6 py-4 text-xs font-bold outline-none" />
+                        <input name="vs" type="number" placeholder="VS" required className="bg-slate-950 border border-white/10 rounded-2xl px-6 py-4 text-xs font-bold outline-none" />
+                        <input name="donations" type="number" placeholder="DON" required className="bg-slate-950 border border-white/10 rounded-2xl px-6 py-4 text-xs font-bold outline-none" />
+                      </div>
+                      <button type="submit" className={`w-full py-6 rounded-[2rem] font-black text-xs uppercase tracking-widest ${isLead ? 'bg-emerald-600 text-black shadow-2xl' : 'bg-slate-900 text-slate-600 cursor-not-allowed'}`}>
+                        {isLead ? 'ENRÔLER MAINTENANT' : 'MODE LEAD REQUIS'}
+                      </button>
+                   </form>
+                </div>
             </div>
           </div>
         )}
 
-        {/* Modal de Sélection d'Agent */}
+        {/* LOGIN MODAL */}
+        {showLogin && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md">
+            <div className="glass-panel p-12 rounded-[3rem] border-amber-500/50 max-w-md w-full text-center space-y-8">
+              <h4 className="text-3xl font-black uppercase italic tracking-tighter text-white">COMMAND LOGIN</h4>
+              <input type="password" value={passInput} onChange={e => setPassInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && checkLead()} placeholder="CODE..." className="w-full bg-slate-950 border border-white/10 rounded-3xl px-6 py-5 text-amber-500 font-black text-center focus:border-amber-500 outline-none text-xl" autoFocus />
+              <button onClick={checkLead} className="w-full py-5 bg-amber-500 text-black rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-amber-500/20">ACCÉDER</button>
+            </div>
+          </div>
+        )}
+
+        {/* CALENDAR SELECT MODAL */}
         {selectedDate && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-[#020617]/90 backdrop-blur-xl animate-in fade-in duration-300">
-            <div className="glass-panel w-full max-w-2xl rounded-[4rem] p-12 shadow-[0_0_100px_rgba(0,0,0,0.5)] border-amber-500/30">
-              <div className="flex justify-between items-center mb-10">
-                <div>
-                  <h5 className="text-4xl font-black uppercase italic tracking-tighter text-white">Affectation Mission</h5>
-                  <p className="text-amber-500 font-black uppercase tracking-widest text-xs mt-1">JOUR : {selectedDate}</p>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-[#020617]/95 backdrop-blur-xl">
+             <div className="glass-panel w-full max-w-2xl rounded-[4rem] p-12 border-amber-500/30">
+                <div className="flex justify-between items-center mb-10">
+                   <h5 className="text-4xl font-black uppercase italic tracking-tighter text-white">Affecter Conducteur</h5>
+                   <button onClick={() => setSelectedDate(null)} className="text-slate-500 text-3xl font-bold">×</button>
                 </div>
-                <button onClick={() => setSelectedDate(null)} className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center hover:bg-slate-800 transition-all text-slate-400">×</button>
-              </div>
-
-              <div className="relative mb-8">
-                <input 
-                  type="text" placeholder="RECHERCHER AGENT..." 
-                  className="w-full bg-slate-950 border border-white/10 rounded-3xl px-8 py-5 text-sm font-black uppercase tracking-widest focus:border-amber-500 transition-all outline-none"
-                  onChange={e => setSearch(e.target.value)}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-4 scrollbar-amber">
-                {processed.map(p => {
-                    const count = trainStats[p.name] || 0;
-                    return (
-                        <button 
-                            key={p.name} 
-                            onClick={() => handleAssign(p.name)}
-                            className="bg-slate-900/60 p-5 rounded-2xl border border-white/5 hover:bg-amber-500 hover:text-black hover:border-amber-400 transition-all text-xs font-black uppercase text-left group flex justify-between items-center"
-                        >
-                            <div className="truncate">
-                                <div className="text-slate-500 group-hover:text-black/50 text-[8px] mb-1">#{p.rank}</div>
-                                {p.name}
-                            </div>
-                            <div className="bg-slate-950/40 group-hover:bg-black/20 px-3 py-1.5 rounded-lg flex flex-col items-center min-w-[40px]">
-                                <span className="text-xs text-amber-500 group-hover:text-black leading-none">{count}</span>
-                                <span className="text-[7px] text-slate-600 group-hover:text-black/40 tracking-tighter">TRAINS</span>
-                            </div>
-                        </button>
-                    )
-                })}
-              </div>
-            </div>
+                <div className="grid grid-cols-2 gap-3 max-h-[500px] overflow-y-auto pr-4 scrollbar-amber">
+                   {fullDataset.map(p => (
+                     <button key={p.name} onClick={() => handleAssign(p.name)} className="bg-slate-900/60 p-5 rounded-2xl border border-white/5 hover:bg-amber-500 hover:text-black transition-all flex justify-between items-center group">
+                        <span className="font-black text-[10px] uppercase">{p.name}</span>
+                        <span className="text-[10px] opacity-40 group-hover:opacity-100">{p.squad}</span>
+                     </button>
+                   ))}
+                </div>
+             </div>
           </div>
         )}
 
-        {(totalPages > 1 && view === 'leaderboard') && (
-          <div className="flex justify-center items-center gap-6 py-24">
-            <button onClick={() => setPage(p => Math.max(1, p-1))} className="px-10 py-5 bg-slate-900 border border-white/5 rounded-2xl text-[11px] font-black tracking-[0.2em] hover:bg-slate-800 transition-all disabled:opacity-20" disabled={page === 1}>PREV SECTOR</button>
-            <div className="flex items-center gap-4 bg-slate-900/40 px-6 py-4 rounded-3xl border border-white/5">
-                <span className="text-white font-black text-xl">{page}</span>
-                <span className="text-slate-500 font-bold">/ {totalPages}</span>
-            </div>
-            <button onClick={() => setPage(p => Math.min(totalPages, p+1))} className="px-10 py-5 bg-slate-900 border border-white/5 rounded-2xl text-[11px] font-black tracking-[0.2em] hover:bg-slate-800 transition-all disabled:opacity-20" disabled={page === totalPages}>NEXT SECTOR</button>
-          </div>
-        )}
       </div>
-
-      <footer className="max-w-7xl mx-auto border-t border-white/5 pt-16 pb-24 flex flex-col md:flex-row justify-between items-center opacity-40">
-        <div className="flex items-center gap-8">
-            <div className="w-14 h-14 rounded-3xl bg-slate-900 border border-white/10 flex items-center justify-center font-black text-2xl text-slate-400">N</div>
-            <div>
-              <p className="text-[12px] font-black uppercase tracking-[0.7em] text-slate-500">NEM RANKING • DESERT STORM</p>
-              <p className="text-[9px] font-bold uppercase tracking-widest text-slate-700 mt-1">Relative Average Scoring Matrix Active • 60/40 Optimized Split</p>
-            </div>
-        </div>
-        <div className="flex items-center gap-12">
-          <div className="flex items-center gap-4">
-            <span className="relative flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-            </span>
-            <span className="text-[11px] font-black text-slate-500 tracking-[0.4em] uppercase">SYSTEM OPTIMIZED</span>
-          </div>
-        </div>
-      </footer>
+      
+      <style>{`
+        .scrollbar-amber::-webkit-scrollbar { width: 4px; }
+        .scrollbar-amber::-webkit-scrollbar-thumb { background: #f59e0b; border-radius: 10px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+      `}</style>
     </div>
   );
 }
