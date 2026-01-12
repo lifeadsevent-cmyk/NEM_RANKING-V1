@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 
 // ========================================================
 // 🛡️ CLOUD DATABASE (PERSISTANCE GITHUB / VERCEL)
@@ -181,6 +181,8 @@ export default function App() {
   const [weekRange, setWeekRange] = useState(INITIAL_WEEK);
   const [exportSource, setExportSource] = useState('');
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [searchTrainAgent, setSearchTrainAgent] = useState('');
+  const trainSearchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('nem_custom_v4');
@@ -190,6 +192,13 @@ export default function App() {
     const savedWeek = localStorage.getItem('nem_week_v4');
     if (savedWeek) setWeekRange(JSON.parse(savedWeek));
   }, []);
+
+  // Focus the search input when the modal opens
+  useEffect(() => {
+    if (selectedDate && trainSearchRef.current) {
+      trainSearchRef.current.focus();
+    }
+  }, [selectedDate]);
 
   const fullDataset = useMemo(() => {
     const all = { ...INITIAL_DATABASE, ...customPlayers };
@@ -217,6 +226,11 @@ export default function App() {
   const teams = useMemo(() => buildTeams(fullDataset), [fullDataset]);
   const filteredData = useMemo(() => fullDataset.filter(p => p.name.toLowerCase().includes(search.toLowerCase())), [fullDataset, search]);
 
+  const filteredTrainAgents = useMemo(() => 
+    fullDataset.filter(p => p.name.toLowerCase().includes(searchTrainAgent.toLowerCase())),
+    [fullDataset, searchTrainAgent]
+  );
+
   const checkLead = () => {
     if (passInput === 'NEMLEAD') { setIsLead(true); setShowLogin(false); setPassInput(''); }
     else alert("ACCÈS REFUSÉ");
@@ -228,6 +242,7 @@ export default function App() {
     setTrain(next);
     localStorage.setItem('nem_train_v4', JSON.stringify(next));
     setSelectedDate(null);
+    setSearchTrainAgent(''); // Reset search
   };
 
   const handleClearTrain = (date: string) => {
@@ -471,21 +486,49 @@ export default function App() {
           </div>
         )}
 
-        {/* CALENDAR SELECT MODAL */}
+        {/* CALENDAR SELECT MODAL (TRAIN) */}
         {selectedDate && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-[#020617]/95 backdrop-blur-xl">
-             <div className="glass-panel w-full max-w-2xl rounded-[4rem] p-12 border-amber-500/30">
-                <div className="flex justify-between items-center mb-10">
-                   <h5 className="text-4xl font-black uppercase italic tracking-tighter text-white">Affecter Conducteur</h5>
-                   <button onClick={() => setSelectedDate(null)} className="text-slate-500 text-3xl font-bold">×</button>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-[#020617]/95 backdrop-blur-xl animate-in fade-in">
+             <div className="glass-panel w-full max-w-2xl rounded-[4rem] p-12 border-amber-500/30 shadow-[0_0_100px_rgba(245,158,11,0.1)]">
+                <div className="flex justify-between items-center mb-8">
+                   <div>
+                      <h5 className="text-4xl font-black uppercase italic tracking-tighter text-white">Mission Train</h5>
+                      <p className="text-amber-500 text-[10px] font-black tracking-widest uppercase">Sélection du conducteur : {selectedDate}</p>
+                   </div>
+                   <button onClick={() => { setSelectedDate(null); setSearchTrainAgent(''); }} className="text-slate-500 hover:text-white text-3xl font-bold transition-colors">×</button>
                 </div>
-                <div className="grid grid-cols-2 gap-3 max-h-[500px] overflow-y-auto pr-4 scrollbar-amber">
-                   {fullDataset.map(p => (
-                     <button key={p.name} onClick={() => handleAssign(p.name)} className="bg-slate-900/60 p-5 rounded-2xl border border-white/5 hover:bg-amber-500 hover:text-black transition-all flex justify-between items-center group">
-                        <span className="font-black text-[10px] uppercase">{p.name}</span>
-                        <span className="text-[10px] opacity-40 group-hover:opacity-100">{p.squad}</span>
-                     </button>
-                   ))}
+
+                {/* QUICK SEARCH FOR TRAIN */}
+                <div className="mb-8">
+                   <input 
+                      ref={trainSearchRef}
+                      type="text" 
+                      placeholder="TROUVER RAPIDEMENT UN AGENT..." 
+                      value={searchTrainAgent}
+                      onChange={e => setSearchTrainAgent(e.target.value)}
+                      className="w-full bg-slate-950 border border-white/5 focus:border-amber-500/50 rounded-2xl px-8 py-5 text-sm font-bold uppercase outline-none transition-all shadow-inner"
+                   />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-4 scrollbar-amber">
+                   {filteredTrainAgents.length > 0 ? (
+                      filteredTrainAgents.map(p => (
+                        <button 
+                          key={p.name} 
+                          onClick={() => handleAssign(p.name)} 
+                          className="bg-slate-900/60 p-5 rounded-2xl border border-white/5 hover:bg-amber-500 hover:text-black transition-all flex justify-between items-center group"
+                        >
+                           <span className="font-black text-[11px] uppercase truncate">{p.name}</span>
+                           <span className={`text-[9px] font-black px-2 py-0.5 rounded border transition-colors ${p.squad === 'ALPHA' ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20 group-hover:bg-black/20 group-hover:text-black group-hover:border-black/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 group-hover:bg-black/20 group-hover:text-black group-hover:border-black/20'}`}>
+                             {p.squad}
+                           </span>
+                        </button>
+                      ))
+                   ) : (
+                     <div className="col-span-2 py-20 text-center">
+                        <p className="text-slate-600 font-black italic uppercase tracking-widest">Aucun agent correspondant</p>
+                     </div>
+                   )}
                 </div>
              </div>
           </div>
