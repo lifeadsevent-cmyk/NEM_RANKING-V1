@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 
 // --- TYPES ---
 export interface PlayerData {
@@ -16,7 +16,8 @@ export interface PlayerData {
 
 export type SortKey = keyof PlayerData;
 export type SortOrder = 'asc' | 'desc';
-export type ViewMode = 'leaderboard' | 'teams';
+export type ViewMode = 'leaderboard' | 'teams' | 'train';
+export type TrainHistory = Record<string, string>;
 
 // --- BASE DE DONNÉES ---
 const PLAYER_DATABASE: Record<string, { force: number; vs: number; donations: number }> = {
@@ -285,6 +286,84 @@ export default function App() {
   const [page, setPage] = useState(1);
   const itemsPerPage = 30;
 
+  // Lead State
+  const [isLead, setIsLead] = useState(false);
+  const [passInput, setPassInput] = useState('');
+  const [showLogin, setShowLogin] = useState(false);
+  
+  // Train State
+  const [train, setTrain] = useState<TrainHistory>({});
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
+  // Calcul des statistiques de train pour les conducteurs
+  const trainStats = useMemo(() => {
+    const stats: Record<string, number> = {};
+    Object.values(train).forEach(name => {
+      stats[name] = (stats[name] || 0) + 1;
+    });
+    return stats;
+  }, [train]);
+
+  const trainRanking = useMemo(() => {
+    return Object.entries(trainStats)
+      .sort(([, a], [, b]) => b - a)
+      .map(([name, count]) => ({ name, count }));
+  }, [trainStats]);
+
+  // Génération des jours du mois en cours
+  const calendarDays = useMemo(() => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const firstDay = new Date(year, month, 1).getDay(); // 0 (Sun) to 6 (Sat)
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    
+    // Normaliser pour que la semaine commence Lundi (1)
+    const startOffset = firstDay === 0 ? 6 : firstDay - 1;
+    
+    const days = [];
+    // Remplissage des jours du mois précédent pour aligner la grille
+    for (let i = 0; i < startOffset; i++) {
+        days.push(null);
+    }
+    // Jours du mois
+    for (let i = 1; i <= daysInMonth; i++) {
+        days.push(`${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`);
+    }
+    return days;
+  }, []);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('nem_calendar_v2');
+    if (saved) try { setTrain(JSON.parse(saved)); } catch (e) {}
+  }, []);
+
+  const handleAssign = (playerName: string) => {
+    if (!isLead || !selectedDate) return;
+    setTrain(prev => {
+      const next = { ...prev };
+      next[selectedDate] = playerName;
+      localStorage.setItem('nem_calendar_v2', JSON.stringify(next));
+      return next;
+    });
+    setSelectedDate(null);
+  };
+
+  const handleClear = (date: string) => {
+    if (!isLead) return;
+    setTrain(prev => {
+      const next = { ...prev };
+      delete next[date];
+      localStorage.setItem('nem_calendar_v2', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const checkLead = () => {
+    if (passInput === 'NEMLEAD') { setIsLead(true); setShowLogin(false); setPassInput(''); }
+    else { alert("ACCÈS REFUSÉ"); setPassInput(''); }
+  };
+
   const teams = useMemo(() => buildTeams(RAW_DATA), []);
 
   const processed = useMemo(() => {
@@ -306,6 +385,8 @@ export default function App() {
     setPage(1);
   };
 
+  const monthName = new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(new Date());
+
   return (
     <div className="min-h-screen bg-[#020617] text-slate-100 p-4 md:p-10 font-['Inter'] selection:bg-indigo-500/30">
       <div className="max-w-7xl mx-auto">
@@ -326,22 +407,44 @@ export default function App() {
             <nav className="flex bg-slate-900/60 p-1.5 rounded-3xl border border-white/5 backdrop-blur-2xl shadow-3xl">
               <button 
                 onClick={() => setView('leaderboard')}
-                className={`px-8 py-4 rounded-2xl text-[11px] font-black tracking-widest transition-all duration-300 ${view === 'leaderboard' ? 'bg-indigo-600 text-white shadow-2xl shadow-indigo-600/40' : 'text-slate-500 hover:text-white'}`}
+                className={`px-6 py-4 rounded-2xl text-[10px] font-black tracking-widest transition-all duration-300 ${view === 'leaderboard' ? 'bg-indigo-600 text-white shadow-2xl shadow-indigo-600/40' : 'text-slate-500 hover:text-white'}`}
               >
                 CLASSEMENT
               </button>
               <button 
                 onClick={() => setView('teams')}
-                className={`px-8 py-4 rounded-2xl text-[11px] font-black tracking-widest transition-all duration-300 ${view === 'teams' ? 'bg-indigo-600 text-white shadow-2xl shadow-indigo-600/40' : 'text-slate-500 hover:text-white'}`}
+                className={`px-6 py-4 rounded-2xl text-[10px] font-black tracking-widest transition-all duration-300 ${view === 'teams' ? 'bg-indigo-600 text-white shadow-2xl shadow-indigo-600/40' : 'text-slate-500 hover:text-white'}`}
               >
                 SQUAD DISPATCH
               </button>
+              <button 
+                onClick={() => setView('train')}
+                className={`px-6 py-4 rounded-2xl text-[10px] font-black tracking-widest transition-all duration-300 ${view === 'train' ? 'bg-amber-600 text-white shadow-2xl shadow-amber-600/40' : 'text-slate-500 hover:text-white'}`}
+              >
+                CALENDRIER TRAIN
+              </button>
             </nav>
-            {view === 'leaderboard' && (
-              <div className="relative w-full sm:w-80 group">
+
+            <div className="flex items-center gap-4">
+              {showLogin ? (
+                <div className="bg-slate-900 border border-amber-500 p-1.5 rounded-2xl flex gap-2 animate-in fade-in slide-in-from-right-2">
+                  <input type="password" placeholder="CODE..." className="bg-transparent outline-none px-3 text-amber-500 font-bold w-20 text-[10px] uppercase" 
+                    value={passInput} onChange={e => setPassInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && checkLead()} autoFocus />
+                  <button onClick={checkLead} className="bg-amber-500 text-black px-4 py-2 rounded-xl font-black text-[9px] uppercase">OK</button>
+                </div>
+              ) : (
+                <button onClick={() => isLead ? setIsLead(false) : setShowLogin(true)} 
+                  className={`px-6 py-4 rounded-2xl border transition-all text-[9px] font-black tracking-widest uppercase ${isLead ? 'bg-amber-500 text-black border-amber-400' : 'bg-slate-950 text-slate-500 border-white/10 hover:text-white'}`}>
+                  {isLead ? 'LEAD ACCÈS' : 'VERROUILLÉ'}
+                </button>
+              )}
+            </div>
+
+            {(view === 'leaderboard') && (
+              <div className="relative w-full sm:w-60 group">
                 <input 
                   type="text" placeholder="LOCATE AGENT..." 
-                  className="bg-slate-900/80 border border-slate-800/50 rounded-2xl px-6 py-4 w-full focus:ring-2 ring-indigo-500/50 outline-none transition-all text-xs font-black tracking-widest placeholder:text-slate-700"
+                  className="bg-slate-900/80 border border-slate-800/50 rounded-2xl px-6 py-4 w-full focus:ring-2 ring-indigo-500/50 outline-none transition-all text-xs font-black tracking-widest placeholder:text-slate-700 uppercase"
                   onChange={e => { setSearch(e.target.value); setPage(1); }}
                 />
               </div>
@@ -349,7 +452,7 @@ export default function App() {
           </div>
         </header>
 
-        {view === 'leaderboard' ? (
+        {view === 'leaderboard' && (
           <div className="space-y-10 animate-in fade-in slide-in-from-top-6 duration-1000 ease-out">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {[
@@ -440,19 +543,10 @@ export default function App() {
                 </table>
               </div>
             </div>
-
-            {totalPages > 1 && (
-              <div className="flex justify-center items-center gap-6 pb-24">
-                <button onClick={() => setPage(p => Math.max(1, p-1))} className="px-10 py-5 bg-slate-900 border border-white/5 rounded-2xl text-[11px] font-black tracking-[0.2em] hover:bg-slate-800 transition-all disabled:opacity-20" disabled={page === 1}>PREV SECTOR</button>
-                <div className="flex items-center gap-4 bg-slate-900/40 px-6 py-4 rounded-3xl border border-white/5">
-                    <span className="text-white font-black text-xl">{page}</span>
-                    <span className="text-slate-500 font-bold">/ {totalPages}</span>
-                </div>
-                <button onClick={() => setPage(p => Math.min(totalPages, p+1))} className="px-10 py-5 bg-slate-900 border border-white/5 rounded-2xl text-[11px] font-black tracking-[0.2em] hover:bg-slate-800 transition-all disabled:opacity-20" disabled={page === totalPages}>NEXT SECTOR</button>
-              </div>
-            )}
           </div>
-        ) : (
+        )}
+
+        {view === 'teams' && (
           <div className="animate-in fade-in slide-in-from-bottom-8 duration-1000 ease-out">
             <div className="glass-panel p-12 rounded-[4rem] mb-12 border-l-[15px] border-indigo-600 shadow-2xl overflow-hidden relative">
               <h2 className="text-6xl font-black tracking-tighter text-white italic mb-2 uppercase relative z-10">Squad Dispatch Protocol</h2>
@@ -475,6 +569,158 @@ export default function App() {
                 totalForceGlobal={totalForceGlobalTeams}
               />
             </div>
+          </div>
+        )}
+
+        {view === 'train' && (
+          <div className="animate-in slide-in-from-bottom-12 duration-1000 ease-out space-y-12 pb-20">
+            <div className="glass-panel p-16 rounded-[5rem] border-l-[25px] border-amber-600 shadow-2xl overflow-hidden relative">
+              <div className="relative z-10">
+                <h3 className="text-7xl font-black italic uppercase tracking-tighter leading-none mb-4 text-white">Log de Commandement</h3>
+                <p className="text-amber-500 font-black uppercase tracking-[0.8em] text-[10px] ml-2 opacity-80">Planning Stratégique Mensuel</p>
+              </div>
+              <div className="absolute right-[-40px] top-[-40px] text-[300px] font-black text-white/5 select-none pointer-events-none italic uppercase">CAL</div>
+            </div>
+
+            {/* Classement Conducteurs - Visible par le Lead */}
+            {isLead && (
+                <div className="glass-panel rounded-[4rem] p-12 border-t-4 border-amber-500 animate-in slide-in-from-top-4">
+                    <div className="flex items-center gap-6 mb-10">
+                        <div className="w-16 h-16 bg-amber-500 rounded-3xl flex items-center justify-center shadow-2xl shadow-amber-500/20">
+                            <svg className="w-8 h-8 text-black" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
+                        </div>
+                        <div>
+                            <h4 className="text-4xl font-black italic uppercase tracking-tighter text-white">Classement Conducteurs</h4>
+                            <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em] mt-1">HALL OF FAME TRAIN (LEAD VIEW)</p>
+                        </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                        {trainRanking.slice(0, 8).map((conducteur, i) => (
+                            <div key={conducteur.name} className="bg-slate-900/40 p-6 rounded-3xl border border-white/5 flex items-center justify-between group hover:border-amber-500/50 transition-all">
+                                <div className="flex items-center gap-4">
+                                    <span className={`text-xl font-black ${i === 0 ? 'text-amber-500' : 'text-slate-600'}`}>#{i + 1}</span>
+                                    <span className="font-bold text-slate-200 group-hover:text-white truncate max-w-[120px]">{conducteur.name}</span>
+                                </div>
+                                <div className="text-right">
+                                    <span className="text-2xl font-black text-amber-500">{conducteur.count}</span>
+                                    <p className="text-[8px] font-black text-slate-600 uppercase tracking-widest">OPS</p>
+                                </div>
+                            </div>
+                        ))}
+                        {trainRanking.length === 0 && <p className="col-span-full text-slate-600 italic uppercase text-[10px] font-black tracking-widest text-center py-10">Aucun déploiement enregistré</p>}
+                    </div>
+                </div>
+            )}
+
+            {/* Calendrier Grid */}
+            <div className="glass-panel rounded-[4rem] p-10 shadow-2xl">
+              <div className="flex justify-between items-center mb-10 px-6">
+                <h4 className="text-4xl font-black uppercase italic tracking-tighter text-white">{monthName}</h4>
+                <div className="flex gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 bg-slate-900 px-4 py-2 rounded-full border border-white/5">Un Seul Agent par Jour autorisé</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-7 gap-4">
+                {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(d => (
+                  <div key={d} className="text-center text-[11px] font-black uppercase tracking-widest text-slate-600 py-4">{d}</div>
+                ))}
+                {calendarDays.map((date, idx) => {
+                  if (!date) return <div key={`empty-${idx}`} className="bg-slate-900/10 rounded-3xl aspect-square opacity-20 border border-dashed border-slate-800"></div>;
+                  
+                  const dayNum = date.split('-')[2];
+                  const assigned = train[date];
+                  const isToday = new Date().toISOString().split('T')[0] === date;
+
+                  return (
+                    <div 
+                      key={date} 
+                      onClick={() => isLead && setSelectedDate(date)}
+                      className={`relative aspect-square rounded-[2rem] border transition-all duration-300 flex flex-col items-center justify-center p-4 cursor-pointer group ${
+                        assigned 
+                        ? 'bg-amber-500/10 border-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.1)]' 
+                        : 'bg-slate-900/40 border-white/5 hover:border-slate-500'
+                      } ${isToday ? 'ring-4 ring-indigo-500/30' : ''}`}
+                    >
+                      <span className={`absolute top-4 left-6 text-[10px] font-black ${assigned ? 'text-amber-500' : 'text-slate-700'}`}>{dayNum}</span>
+                      {assigned ? (
+                        <>
+                          <span className="text-sm font-black text-white text-center uppercase leading-tight tracking-tighter mb-1">{assigned}</span>
+                          <span className="text-[8px] font-black text-amber-500 uppercase tracking-widest">ASSIGNÉ</span>
+                          {isLead && (
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); handleClear(date); }}
+                                className="absolute top-2 right-2 w-6 h-6 rounded-full bg-slate-950 text-slate-500 hover:text-red-400 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                                ×
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-[9px] font-black text-slate-800 group-hover:text-slate-500 uppercase tracking-widest">{isLead ? 'CHOISIR' : 'LIBRE'}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal de Sélection d'Agent */}
+        {selectedDate && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-[#020617]/90 backdrop-blur-xl animate-in fade-in duration-300">
+            <div className="glass-panel w-full max-w-2xl rounded-[4rem] p-12 shadow-[0_0_100px_rgba(0,0,0,0.5)] border-amber-500/30">
+              <div className="flex justify-between items-center mb-10">
+                <div>
+                  <h5 className="text-4xl font-black uppercase italic tracking-tighter text-white">Affectation Mission</h5>
+                  <p className="text-amber-500 font-black uppercase tracking-widest text-xs mt-1">JOUR : {selectedDate}</p>
+                </div>
+                <button onClick={() => setSelectedDate(null)} className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center hover:bg-slate-800 transition-all text-slate-400">×</button>
+              </div>
+
+              <div className="relative mb-8">
+                <input 
+                  type="text" placeholder="RECHERCHER AGENT..." 
+                  className="w-full bg-slate-950 border border-white/10 rounded-3xl px-8 py-5 text-sm font-black uppercase tracking-widest focus:border-amber-500 transition-all outline-none"
+                  onChange={e => setSearch(e.target.value)}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-4 scrollbar-amber">
+                {processed.map(p => {
+                    const count = trainStats[p.name] || 0;
+                    return (
+                        <button 
+                            key={p.name} 
+                            onClick={() => handleAssign(p.name)}
+                            className="bg-slate-900/60 p-5 rounded-2xl border border-white/5 hover:bg-amber-500 hover:text-black hover:border-amber-400 transition-all text-xs font-black uppercase text-left group flex justify-between items-center"
+                        >
+                            <div className="truncate">
+                                <div className="text-slate-500 group-hover:text-black/50 text-[8px] mb-1">#{p.rank}</div>
+                                {p.name}
+                            </div>
+                            <div className="bg-slate-950/40 group-hover:bg-black/20 px-3 py-1.5 rounded-lg flex flex-col items-center min-w-[40px]">
+                                <span className="text-xs text-amber-500 group-hover:text-black leading-none">{count}</span>
+                                <span className="text-[7px] text-slate-600 group-hover:text-black/40 tracking-tighter">TRAINS</span>
+                            </div>
+                        </button>
+                    )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {(totalPages > 1 && view === 'leaderboard') && (
+          <div className="flex justify-center items-center gap-6 py-24">
+            <button onClick={() => setPage(p => Math.max(1, p-1))} className="px-10 py-5 bg-slate-900 border border-white/5 rounded-2xl text-[11px] font-black tracking-[0.2em] hover:bg-slate-800 transition-all disabled:opacity-20" disabled={page === 1}>PREV SECTOR</button>
+            <div className="flex items-center gap-4 bg-slate-900/40 px-6 py-4 rounded-3xl border border-white/5">
+                <span className="text-white font-black text-xl">{page}</span>
+                <span className="text-slate-500 font-bold">/ {totalPages}</span>
+            </div>
+            <button onClick={() => setPage(p => Math.min(totalPages, p+1))} className="px-10 py-5 bg-slate-900 border border-white/5 rounded-2xl text-[11px] font-black tracking-[0.2em] hover:bg-slate-800 transition-all disabled:opacity-20" disabled={page === totalPages}>NEXT SECTOR</button>
           </div>
         )}
       </div>
